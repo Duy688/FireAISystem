@@ -108,6 +108,9 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
   <a href="#cpu">CPU breakdown</a>
   <a href="#memory">Memory</a>
   <a href="#throughput">Throughput &amp; Latency</a>
+  <a href="#sweep">FPS Sweep Test</a>
+  <a href="#cams-sweep">Cams Sweep (Per-cam max)</a>
+  <a href="#bottleneck">Pipeline Bottleneck</a>
   <a href="#capacity">Capacity &amp; Recommendations</a>
 </nav>
 
@@ -432,8 +435,345 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
   </div>
 </section>
 
+<section id="sweep">
+  <h2><span class="num">07</span>FPS Sweep Test — Tìm trần thực tế</h2>
+  <p class="lead">Bằng chứng: <b>6 levels test thực</b>, mỗi level restart app + 5 phút sample, thay đổi <code>DS_DEC_DROP_INTERVAL</code> + <code>PGIE_EXPORT_FPS</code>. Run: <code>run_20260519_032713_FPSSWEEP</code>.</p>
+
+  <div class="callout">
+    <b>Câu trả lời ngắn:</b> tại 32 cam, throughput <b>plateau ở 19.3-20.0 fps tổng</b> (≈0.62 fps/cam) <b>BẤT KỂ</b>
+    config — nâng GATE từ 2 → 25 không tăng throughput vì <b>GPU 96-100% đã saturated</b>.
+    Đây là trần thực tế hiện tại của pipeline, không phải config đặt thấp.
+  </div>
+
+  <div class="grid" style="margin-bottom:16px">
+    <div class="card">
+      <h3>Trần FPS/cam ổn định</h3>
+      <div class="kpi">0.62<span class="unit">fps/cam</span></div>
+      <div class="kpi-sub">L1 (DROP=3, GATE=3) — PASS 5/5 criteria</div>
+    </div>
+    <div class="card">
+      <h3>Throughput tổng max</h3>
+      <div class="kpi">20.0<span class="unit">fps</span></div>
+      <div class="kpi-sub">32 cam × 0.625 fps (plateau)</div>
+    </div>
+    <div class="card">
+      <h3>GPU tại trần</h3>
+      <div class="kpi" style="color:var(--red)">96-100<span class="unit">% saturated</span></div>
+      <div class="kpi-sub">Bottleneck cứng = GPU compute (PGIE inference)</div>
+    </div>
+    <div class="card">
+      <h3>Per-cam fairness</h3>
+      <div class="kpi" style="color:var(--green)">CV 2-5<span class="unit">%</span></div>
+      <div class="kpi-sub">Mọi cam nhận share tương đương, không starve</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3>Throughput tổng theo từng level</h3>
+      <div class="chart-wrap"><canvas id="chart-sweep-tput"></canvas></div>
+      <div class="footnote">6 levels nâng dần áp lực. Tput plateau ~20 fps suốt → GPU bottleneck. L5 = full firehose (no decoder drop).</div>
+    </div>
+    <div class="card">
+      <h3>Per-cam FPS theo level</h3>
+      <div class="chart-wrap"><canvas id="chart-sweep-percam"></canvas></div>
+      <div class="footnote">Per-cam avg ~0.60-0.63 fps. Không tăng dù gate nới rộng.</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:16px">
+    <div class="card">
+      <h3>GPU clock activity theo level</h3>
+      <div class="chart-wrap"><canvas id="chart-sweep-gpu"></canvas></div>
+      <div class="footnote">GR3D_FREQ avg 96-98%, max 99-100% — saturated ở mọi config. CHỨNG MINH bottleneck = GPU.</div>
+    </div>
+    <div class="card">
+      <h3>Device RAM peak theo level</h3>
+      <div class="chart-wrap"><canvas id="chart-sweep-ram"></canvas></div>
+      <div class="footnote">L5 (DROP=0 = no drop) nhảy lên 12.3 GB do NVDEC buffer 800 fps input. Cảnh báo: <b>không dùng DROP=0 trên 32 cam</b>.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Chi tiết 6 levels</h3>
+    <div class="scroll-tbl">
+      <table>
+        <thead>
+          <tr>
+            <th>Level</th><th class="num">DROP</th><th class="num">GATE</th>
+            <th class="num">Tput (fps)</th><th class="num">Per-cam</th><th class="num">CV%</th>
+            <th class="num">GPU avg/max</th><th class="num">RAM peak (MB)</th>
+            <th class="num">RSS slope (MB/m)</th><th class="num">CPU max</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody id="tbl-sweep"></tbody>
+      </table>
+    </div>
+    <div class="footnote" style="margin-top:10px">
+      <b>5 criteria:</b> C1 fairness (CV%&lt;15) · C2 stability (tput drop &lt;10%) · C3 no leak (slope &lt;5 MB/m) ·
+      C4 CPU OK (peak &lt;1100% giả định 12 core) · C5 err rate &lt;1/m.
+      <br>
+      <b>Caveat C3:</b> sample 5 phút sau restart bao gồm warmup (RSS ramp 1.1 → 1.7 GB) → slope inflated. Run 20-phút trước (steady-state) đo slope <b>+0.06 MB/m → không leak thực</b>.
+    </div>
+  </div>
+
+  <div class="callout ok" style="margin-top:16px">
+    <b>Khuyến nghị config:</b>
+    <ol style="margin:8px 0 0 20px; padding:0">
+      <li><b>Giữ baseline hiện tại</b> (<code>DS_DEC_DROP_INTERVAL=3, PGIE_EXPORT_FPS=2</code>) — proven 26+ phút, an toàn nhất.</li>
+      <li>Tùy chọn: chuyển sang L1 (<code>DROP=3, GATE=3</code>) cho +0.5% tput, marginal.</li>
+      <li><b>KHÔNG dùng DROP=0</b>: RAM peak nhảy lên 12.3 GB (vs 9.5 GB), có risk OOM nếu chạy dài.</li>
+      <li>Muốn nhiều FPS/cam hơn → giảm số cam, optimize model (INT8), hoặc upgrade Orin AGX.</li>
+    </ol>
+  </div>
+
+  <div class="footnote" style="text-align:center; margin-top:14px">
+    Báo cáo chi tiết: <code>logs/profile/run_20260519_032713_FPSSWEEP/SWEEP_FPS_ANALYSIS.md</code> &middot;
+    <code>SWEEP_FPS_REPORT.md</code>
+  </div>
+</section>
+
+<section id="cams-sweep">
+  <h2><span class="num">08</span>Cameras Sweep — Per-cam FPS có thể đạt tối đa bao nhiêu?</h2>
+  <p class="lead">Bằng chứng: <b>5 levels test thực</b> N=[1, 4, 8, 16, 32] cam, push hard config <code>DROP=1 GATE=25</code>. Run: <code>run_20260519_043737_CAMSSWEEP</code>.</p>
+
+  <div class="callout err">
+    <b>Phát hiện gây sốc:</b> Per-cam FPS bị "khóa cứng" tại <b>~0.62 fps</b> BẤT KỂ giảm số camera xuống còn 1 duy nhất.
+    Bottleneck thực sự = <b>PGIE batch processing time</b> (~1.6s/batch), KHÔNG phải GPU compute như tegrastats báo.
+    GR3D=99% chỉ là clock-gating signal, compute thực ~33% (Nsight Systems confirmed).
+  </div>
+
+  <div class="grid" style="margin-bottom:16px">
+    <div class="card">
+      <h3>Per-cam FPS observed</h3>
+      <div class="kpi">0.62<span class="unit">fps/cam (locked)</span></div>
+      <div class="kpi-sub">N=1 → 0.62, N=32 → 0.61 — không đổi</div>
+    </div>
+    <div class="card">
+      <h3>Sweet spot cho target 1 fps/cam</h3>
+      <div class="kpi" style="color:var(--red)">❌ KHÔNG đạt</div>
+      <div class="kpi-sub">Max observed 0.62 fps/cam — cần optimize pipeline</div>
+    </div>
+    <div class="card">
+      <h3>Sweet spot cho 3 fps/cam</h3>
+      <div class="kpi" style="color:var(--red)">❌ KHÔNG đạt</div>
+      <div class="kpi-sub">Cần x4.8 speedup: interval=0 + INT8 + smaller model</div>
+    </div>
+    <div class="card">
+      <h3>Sweet spot cho 5 fps/cam</h3>
+      <div class="kpi" style="color:var(--red)">❌ KHÔNG đạt</div>
+      <div class="kpi-sub">Cần x8: combo optimize hoặc upgrade Orin AGX</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3>Throughput tổng tăng tuyến tính theo N</h3>
+      <div class="chart-wrap"><canvas id="chart-cams-tput"></canvas></div>
+      <div class="footnote">Tput ≈ N × 0.62 — perfect linear. Mỗi cam thêm vào → tput tăng đúng ~0.62 fps.</div>
+    </div>
+    <div class="card">
+      <h3>Per-cam FPS hằng số (locked tại ~0.62)</h3>
+      <div class="chart-wrap"><canvas id="chart-cams-percam"></canvas></div>
+      <div class="footnote">N=1 → 0.62, N=32 → 0.61 — không đổi. Đường target 1/3/5 fps đều xa.</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:16px">
+    <div class="card">
+      <h3>GPU clock activity (luôn 99% bất kể N)</h3>
+      <div class="chart-wrap"><canvas id="chart-cams-gpu"></canvas></div>
+      <div class="footnote">99% là <b>clock-gating</b> không phải compute thực. Nếu là compute thật, N=1 phải có GPU ≪ 99%.</div>
+    </div>
+    <div class="card">
+      <h3>Device RAM tăng ~85 MB/cam</h3>
+      <div class="chart-wrap"><canvas id="chart-cams-ram"></canvas></div>
+      <div class="footnote">RAM ≈ 7.5 GB base + 0.085 GB/cam. Theoretical max trên 16 GB → ~75-80 cam.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Chi tiết 5 levels</h3>
+    <div class="scroll-tbl">
+      <table>
+        <thead>
+          <tr>
+            <th>N cam</th><th class="num">Tput tổng (fps)</th><th class="num">Per-cam avg</th>
+            <th class="num">CV%</th><th class="num">GPU avg/max</th><th class="num">RAM peak (MB)</th>
+            <th class="num">RSS slope (MB/m)</th><th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody id="tbl-cams"></tbody>
+      </table>
+    </div>
+    <div class="footnote" style="margin-top:10px">
+      <b>Bottleneck explained:</b> Pipeline có <code>batch-size=32</code> trong streammux + PGIE TRT engine.
+      Mỗi batch process mất ~1.6s (PGIE + tracker). Mỗi cam được phân 1 frame/batch → per-cam fps = batch rate = 0.62.
+      Khi N=1 vẫn cùng batch latency vì engine optimize cho batch=32 (lãng phí 31 slots empty).
+    </div>
+  </div>
+
+  <div class="callout warn" style="margin-top:16px">
+    <b>Để tăng per-cam FPS, cần giảm batch latency:</b>
+    <table style="margin-top:10px; width:100%">
+      <thead><tr><th>Phương án</th><th class="num">Ước speedup</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr><td>PGIE <code>interval=0</code> (hiện 1)</td><td class="num">x2</td><td>x2 GPU compute, x2 latency-to-detect</td></tr>
+        <tr><td>INT8 quantization (hiện FP16)</td><td class="num">x1.5-2</td><td>~1-2% mAP drop</td></tr>
+        <tr><td>Smaller model (YOLOv8n)</td><td class="num">x2-3</td><td>recall thấp hơn</td></tr>
+        <tr><td>Smaller input (480×272)</td><td class="num">x2</td><td>object nhỏ khó detect</td></tr>
+        <tr><td>Upgrade Orin AGX 64GB</td><td class="num">x3-4</td><td>tiền</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:10px">
+      <b>Combos:</b> <code>interval=0 + INT8</code> → ước ~3 fps/cam. + smaller batch → ~5 fps/cam.
+    </div>
+  </div>
+
+  <div class="footnote" style="text-align:center; margin-top:14px">
+    Báo cáo chi tiết: <code>logs/profile/run_20260519_043737_CAMSSWEEP/SWEEP_CAMS_ANALYSIS.md</code>
+  </div>
+</section>
+
+<!-- ============================================================== -->
+<!-- PIPELINE BOTTLENECK ANALYSIS (Nsight Systems)                   -->
+<!-- ============================================================== -->
+<section id="bottleneck">
+  <h2><span class="num">09</span>Pipeline Bottleneck — Nsight Systems Analysis</h2>
+  <p class="lead">Tại sao per-cam FPS bị khóa ở ~0.6 fps dù tài nguyên thừa? Nsight Systems trace 54.3s cho câu trả lời.</p>
+
+  <div class="callout warn">
+    <b>Bottleneck = PGIE batch processing time, KHÔNG phải thiếu tài nguyên.</b>
+    GPU compute thực chỉ ~22% mỗi inference cycle, CPU avg ~50%, RAM 58% — nhưng pipeline stages xếp hàng sequential.<br>
+    <code>interval=1</code> → PGIE inference mỗi 2 batch (skip batch chỉ tracker, bypass <code>buffer_process</code>).<br>
+    Inference batch: <b>avg 3.8s</b> (1.6-6.4s). GStreamer pipelining → effective output: <b>~1.5s/batch → 0.67 fps/cam</b>.
+  </div>
+
+  <!-- Pipeline flow diagram -->
+  <div class="card" style="margin-bottom:16px">
+    <h3>Chuỗi pipeline thực tế (đo được)</h3>
+    <div style="font-family:ui-monospace,monospace; font-size:13px; line-height:1.8; overflow-x:auto; white-space:pre; padding:8px 0; color:#334155;">RTSP 25 fps/cam &times; 32 cam              = 800 fps
+  &darr; NVDEC drop (DS_DEC_DROP_INTERVAL=3) = 200 fps (6.25/cam)
+  &darr; Streammux batch=32                  &rarr; ~6.2 batches/s input
+  &darr; <b style="color:#e74c3c">PGIE (interval=1: inference mỗi 2 batch)</b>  &larr; BOTTLENECK
+  &darr;   Inference batch: avg 3.8s (1.6-6.4s) — TRT + tracker + metadata
+  &darr;   Skip batch: tracker predict only (bypass buffer_process, không có trong NVTX)
+  &darr; Back-pressure drop ~90%             = ~20 fps total (lý thuyết 0.67, thực đo ~0.6/cam)
+  &darr; Export gate (PGIE_EXPORT_FPS=2)     = ~10 fps total (~0.30/cam)
+  &darr; Pad probe &rarr; Orchestrator &rarr; VLM &rarr; Event</div>
+  </div>
+
+  <!-- KPIs row -->
+  <div class="grid" style="grid-template-columns:repeat(5,1fr); margin-bottom:16px;">
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Inference batch (nsys)</div>
+      <div class="kpi" style="font-size:24px;color:var(--red)">3.8<span class="unit">s</span></div>
+      <div class="kpi-sub">avg (1.6-6.4s), 12 batches</div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Effective output</div>
+      <div class="kpi" style="font-size:24px">1.5<span class="unit">s/batch</span></div>
+      <div class="kpi-sub">interval=1 + pipelining → 0.67 fps/cam</div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">GPU thật sự tính</div>
+      <div class="kpi" style="font-size:24px;color:var(--green)">822<span class="unit">ms</span></div>
+      <div class="kpi-sub">22% inference cycle</div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">CPU đợi (dequeue)</div>
+      <div class="kpi" style="font-size:24px;color:var(--orange)">1.4<span class="unit">s</span></div>
+      <div class="kpi-sub">36% inference cycle</div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TRT inferences</div>
+      <div class="kpi" style="font-size:24px">13</div>
+      <div class="kpi-sub">in 54.3s trace</div>
+    </div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid-2">
+    <div class="card">
+      <h3>1 Inference Batch — Thời gian từng stage (avg)</h3>
+      <div class="chart-wrap tall"><canvas id="chart-bottleneck-pie"></canvas></div>
+      <div class="footnote">Các sub-stage <b>sequential</b> bên trong 1 batch cycle (avg 3.8s). GPU thật sự tính chỉ 22%, phần còn lại = CPU overhead.</div>
+    </div>
+    <div class="card">
+      <h3>12 Inference Batches — Cycle Time (ms)</h3>
+      <div class="chart-wrap tall"><canvas id="chart-bottleneck-batches"></canvas></div>
+      <div class="footnote">Tất cả 12 batch đều có TRT inference (loại outlier batch 13). Batch ngắn 1.6s = queueInput nhanh, KHÔNG phải skip.</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:16px">
+    <div class="card">
+      <h3>1 Inference Batch — Breakdown chi tiết (horizontal)</h3>
+      <div class="chart-wrap"><canvas id="chart-bottleneck-breakdown"></canvas></div>
+      <div class="footnote">Nguồn: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code>. dequeue+attach (CPU đợi GPU) chiếm 36% — stage tốn nhất.</div>
+    </div>
+    <div class="card">
+      <h3>Fire Detection Latency — Timeline (best case)</h3>
+      <div class="chart-wrap"><canvas id="chart-bottleneck-latency"></canvas></div>
+      <div class="footnote">Postprocess cần 3 appearances. Effective batch output mỗi ~1.5s → 2 interval = 3.0s. VLM song song từ frame 2.</div>
+    </div>
+  </div>
+
+  <!-- Why resources are idle table -->
+  <div class="card" style="margin-top:16px">
+    <h3>Tại sao tài nguyên "thừa" nhưng FPS vẫn thấp?</h3>
+    <table>
+      <thead><tr>
+        <th>Tài nguyên</th><th>Usage</th><th>Thừa</th><th>Tại sao không giúp?</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>CPU</td><td>~50%</td><td>~50%</td><td>Pipeline sequential — thêm CPU core không giúp vì các stage đợi nhau</td></tr>
+        <tr><td>RAM</td><td>9.1/15.7 GB</td><td>6.6 GB</td><td>RAM không phải bottleneck</td></tr>
+        <tr><td>GPU compute (SM)</td><td>~22%</td><td>~78%</td><td>GPU tính 822ms nhưng phải <b>chờ</b> CPU copy/metadata ~3s</td></tr>
+        <tr><td>GPU clock (tegrastats)</td><td>99%</td><td style="color:var(--red)">Lừa!</td><td>Clock bật vì có work trong queue, SMs idle ~78% thời gian</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Settings don't help table -->
+  <div class="card" style="margin-top:16px">
+    <h3>Thay đổi DeepStream settings — tại sao không giúp tăng per-cam FPS?</h3>
+    <table>
+      <thead><tr><th>Setting</th><th>Chỉnh gì</th><th>Kết quả</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_DEC_DROP_INTERVAL</code> giảm</td><td>Decode nhiều frame hơn</td><td>PGIE output vẫn ~0.6 fps/cam → streammux drop nhiều hơn. <b>Không đổi</b></td></tr>
+        <tr><td><code>DS_DEC_DROP_INTERVAL</code> tăng</td><td>Decode ít frame hơn</td><td>PGIE lấy batch cùng tốc độ. <b>Không đổi</b></td></tr>
+        <tr><td><code>PGIE_EXPORT_FPS</code> tăng</td><td>Gate mở rộng hơn</td><td>PGIE input chỉ ~0.6/cam → không thêm frame để cho qua. <b>Không đổi</b></td></tr>
+        <tr><td>Giảm số camera</td><td>Ít cam trong batch</td><td>Engine batch=32 fixed → cùng tốc độ. <b>Gần như không đổi</b> (đã kiểm chứng)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- What actually helps -->
+  <div class="card" style="margin-top:16px">
+    <h3>Muốn tăng per-cam FPS — phải thay đổi gì?</h3>
+    <table>
+      <thead><tr><th>Thay đổi</th><th>Tác động</th><th>Effort</th></tr></thead>
+      <tbody>
+        <tr style="background:#ecfdf5"><td><code>interval=0</code> (hiện =1)</td><td>~2&times; → ~1.2 fps/cam</td><td><span class="tag tag-ok">Config change</span></td></tr>
+        <tr><td>INT8 quantization</td><td>+50-100%</td><td><span class="tag tag-warn">High</span> — cần calibration</td></tr>
+        <tr><td>Smaller model (960&times;544 → 480&times;272)</td><td>+100-200%</td><td><span class="tag tag-warn">Medium</span></td></tr>
+        <tr><td>Lighter tracker (NvDCF → IOU)</td><td>Bỏ 32% wall time</td><td><span class="tag tag-warn">Medium</span></td></tr>
+        <tr><td>Rebuild TRT engine batch &lt; 32</td><td>Giảm batch latency</td><td><span class="tag tag-warn">Medium</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footnote" style="text-align:center; margin-top:14px">
+    Nguồn dữ liệu: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code> (NVTX Range Summary) +
+    <code>phase4_gpu/nsys_stats_cuda_gpu_kern_sum.txt</code> (GPU Kernel Timing) —
+    trace file: <code>phase4_gpu/fire_ai.nsys-rep</code> (34 MB, mở bằng Nsight Systems GUI)
+  </div>
+</section>
+
 <section id="capacity">
-  <h2><span class="num">07</span>Capacity &amp; Recommendations</h2>
+  <h2><span class="num">10</span>Capacity &amp; Recommendations</h2>
   <p class="lead">Dùng số đo thực để trả lời "thêm cam được không?" / "thêm bài toán được không?"</p>
 
   <div class="grid">
@@ -886,6 +1226,283 @@ const COMMON_LINE_OPTS = {
   });
 })();
 
+// ===== FPS Sweep Test charts + table =====
+const SWEEP_DATA = [
+  {"label":"L0","cfg":"DROP=3 GATE=2","drop":3,"gate":2,"tput":19.91,"per_cam":0.622,"cv":2.48,"gpu_avg":97.0,"gpu_max":99,"ram_max":9595,"slope":6.484,"cpu_max":416.1,"verdict":"FAIL","passed":4},
+  {"label":"L1","cfg":"DROP=3 GATE=3","drop":3,"gate":3,"tput":20.00,"per_cam":0.625,"cv":2.80,"gpu_avg":96.1,"gpu_max":100,"ram_max":9589,"slope":1.372,"cpu_max":421.5,"verdict":"PASS","passed":5},
+  {"label":"L2","cfg":"DROP=2 GATE=3","drop":2,"gate":3,"tput":19.94,"per_cam":0.623,"cv":4.36,"gpu_avg":97.5,"gpu_max":99,"ram_max":9522,"slope":4.228,"cpu_max":371.4,"verdict":"FAIL","passed":4},
+  {"label":"L3","cfg":"DROP=2 GATE=5","drop":2,"gate":5,"tput":19.57,"per_cam":0.612,"cv":4.75,"gpu_avg":96.5,"gpu_max":99,"ram_max":9585,"slope":4.491,"cpu_max":369.3,"verdict":"PASS","passed":5},
+  {"label":"L4","cfg":"DROP=1 GATE=8","drop":1,"gate":8,"tput":19.29,"per_cam":0.603,"cv":2.20,"gpu_avg":97.1,"gpu_max":99,"ram_max":9660,"slope":6.287,"cpu_max":359.3,"verdict":"FAIL","passed":4},
+  {"label":"L5","cfg":"DROP=0 GATE=25","drop":0,"gate":25,"tput":19.87,"per_cam":0.621,"cv":3.34,"gpu_avg":96.2,"gpu_max":99,"ram_max":12318,"slope":8.211,"cpu_max":370.2,"verdict":"FAIL","passed":4}
+];
+
+(function() {
+  const labels = SWEEP_DATA.map(d => `${d.label}\n${d.cfg}`);
+  const colors = SWEEP_DATA.map(d => d.verdict === "PASS" ? COLORS.green : COLORS.orange);
+
+  // 1) Throughput tổng
+  new Chart(document.getElementById('chart-sweep-tput'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{label: 'Throughput tổng (fps)', data: SWEEP_DATA.map(d => d.tput), backgroundColor: colors}]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display:false}, title:{display:false}},
+      scales: {
+        y: {beginAtZero:false, min:15, max:22, title:{display:true, text:'fps tổng (32 cam)'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:10}}}
+      }
+    }
+  });
+
+  // 2) Per-cam FPS
+  new Chart(document.getElementById('chart-sweep-percam'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{label: 'Per-cam avg (fps)', data: SWEEP_DATA.map(d => d.per_cam), backgroundColor: colors}]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display:false}},
+      scales: {
+        y: {beginAtZero:true, max:1.0, title:{display:true, text:'fps / cam'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:10}}}
+      }
+    }
+  });
+
+  // 3) GPU activity avg + max
+  new Chart(document.getElementById('chart-sweep-gpu'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {label: 'GR3D avg %', data: SWEEP_DATA.map(d => d.gpu_avg), backgroundColor: COLORS.orange},
+        {label: 'GR3D max %', data: SWEEP_DATA.map(d => d.gpu_max), backgroundColor: COLORS.red}
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {position:'top', labels:{font:{size:11}, boxWidth:12}}},
+      scales: {
+        y: {beginAtZero:false, min:80, max:105, title:{display:true, text:'GR3D %'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:10}}}
+      }
+    }
+  });
+
+  // 4) Device RAM peak
+  new Chart(document.getElementById('chart-sweep-ram'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Device RAM peak (MB)',
+        data: SWEEP_DATA.map(d => d.ram_max),
+        backgroundColor: SWEEP_DATA.map(d => d.ram_max > 11000 ? COLORS.red : COLORS.teal)
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display:false}},
+      scales: {
+        y: {beginAtZero:false, min:9000, max:13000, title:{display:true, text:'MB / 15657 MB'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:10}}}
+      }
+    }
+  });
+
+  // Render table
+  const tbody = document.getElementById('tbl-sweep');
+  if (tbody) {
+    tbody.innerHTML = SWEEP_DATA.map(d => {
+      const v = d.verdict === "PASS"
+        ? '<span class="tag tag-ok">PASS ' + d.passed + '/5</span>'
+        : '<span class="tag tag-warn">FAIL ' + d.passed + '/5</span>';
+      return `<tr>
+        <td><b>${d.label}</b></td>
+        <td class="num">${d.drop}</td>
+        <td class="num">${d.gate}</td>
+        <td class="num">${d.tput.toFixed(1)}</td>
+        <td class="num">${d.per_cam.toFixed(3)}</td>
+        <td class="num">${d.cv.toFixed(1)}%</td>
+        <td class="num">${d.gpu_avg.toFixed(0)} / ${d.gpu_max}%</td>
+        <td class="num">${d.ram_max}</td>
+        <td class="num">${d.slope >= 0 ? '+' : ''}${d.slope.toFixed(2)}</td>
+        <td class="num">${d.cpu_max.toFixed(0)}%</td>
+        <td>${v}</td>
+      </tr>`;
+    }).join('');
+  }
+})();
+
+// ===== Cameras Sweep charts + table =====
+const CAMS_DATA = [
+  {"n":1,  "tput":0.62,  "per_cam":0.620, "cv":0.0, "gpu_avg":99.0, "gpu_max":99, "ram_max":7667,  "slope":-0.38, "verdict":"FAIL", "passed":4},
+  {"n":4,  "tput":2.44,  "per_cam":0.610, "cv":0.0, "gpu_avg":99.0, "gpu_max":99, "ram_max":7984,  "slope":-0.38, "verdict":"PASS", "passed":5},
+  {"n":8,  "tput":4.96,  "per_cam":0.620, "cv":0.0, "gpu_avg":99.0, "gpu_max":99, "ram_max":8413,  "slope":1.53,  "verdict":"PASS", "passed":5},
+  {"n":16, "tput":9.97,  "per_cam":0.623, "cv":0.0, "gpu_avg":99.0, "gpu_max":99, "ram_max":9117,  "slope":2.36,  "verdict":"PASS", "passed":5},
+  {"n":32, "tput":19.56, "per_cam":0.611, "cv":0.2, "gpu_avg":99.0, "gpu_max":99, "ram_max":10200, "slope":5.61,  "verdict":"FAIL", "passed":4}
+];
+
+(function() {
+  const labels = CAMS_DATA.map(d => `N=${d.n}`);
+  const passColors = CAMS_DATA.map(d => d.verdict === "PASS" ? COLORS.green : COLORS.orange);
+
+  // 1) Throughput tổng (linear scaling)
+  new Chart(document.getElementById('chart-cams-tput'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Throughput tổng (fps)',
+          data: CAMS_DATA.map(d => d.tput),
+          backgroundColor: COLORS.teal,
+          order: 2
+        },
+        {
+          type: 'line',
+          label: 'Ideal linear (0.62 × N)',
+          data: CAMS_DATA.map(d => d.n * 0.62),
+          borderColor: COLORS.purple,
+          backgroundColor: 'transparent',
+          borderDash: [6, 4],
+          tension: 0,
+          pointRadius: 4,
+          order: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {position:'top', labels:{font:{size:11}, boxWidth:12}}},
+      scales: {
+        y: {beginAtZero:true, title:{display:true, text:'fps tổng'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:11}}}
+      }
+    }
+  });
+
+  // 2) Per-cam FPS — flatline với reference lines cho 1/3/5 fps
+  new Chart(document.getElementById('chart-cams-percam'), {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          label: 'Per-cam observed',
+          data: CAMS_DATA.map(d => d.per_cam),
+          borderColor: COLORS.accent,
+          backgroundColor: 'rgba(37,99,235,0.1)',
+          fill: true,
+          tension: 0,
+          pointRadius: 5,
+          pointBackgroundColor: COLORS.accent
+        },
+        {
+          label: 'Target 1 fps/cam',
+          data: CAMS_DATA.map(() => 1.0),
+          borderColor: COLORS.green,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false
+        },
+        {
+          label: 'Target 3 fps/cam',
+          data: CAMS_DATA.map(() => 3.0),
+          borderColor: COLORS.orange,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false
+        },
+        {
+          label: 'Target 5 fps/cam',
+          data: CAMS_DATA.map(() => 5.0),
+          borderColor: COLORS.red,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {position:'top', labels:{font:{size:10}, boxWidth:12}}},
+      scales: {
+        y: {beginAtZero:true, max:6, title:{display:true, text:'fps / cam'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:11}}}
+      }
+    }
+  });
+
+  // 3) GPU clock activity — always 99%
+  new Chart(document.getElementById('chart-cams-gpu'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'GR3D clock-on %',
+        data: CAMS_DATA.map(d => d.gpu_avg),
+        backgroundColor: COLORS.orange
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display:false}},
+      scales: {
+        y: {beginAtZero:false, min:80, max:105, title:{display:true, text:'GR3D %'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:11}}}
+      }
+    }
+  });
+
+  // 4) Device RAM tăng tuyến tính
+  new Chart(document.getElementById('chart-cams-ram'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Device RAM peak (MB)',
+        data: CAMS_DATA.map(d => d.ram_max),
+        backgroundColor: COLORS.teal
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display:false}},
+      scales: {
+        y: {beginAtZero:false, min:7000, max:11000, title:{display:true, text:'MB / 15657 MB'}, ticks:{font:{size:11}}},
+        x: {ticks: {font: {size:11}}}
+      }
+    }
+  });
+
+  // Render table
+  const tbody = document.getElementById('tbl-cams');
+  if (tbody) {
+    tbody.innerHTML = CAMS_DATA.map(d => {
+      const v = d.verdict === "PASS"
+        ? '<span class="tag tag-ok">PASS ' + d.passed + '/5</span>'
+        : '<span class="tag tag-warn">FAIL ' + d.passed + '/5</span>';
+      return `<tr>
+        <td><b>${d.n}</b></td>
+        <td class="num">${d.tput.toFixed(2)}</td>
+        <td class="num"><b>${d.per_cam.toFixed(3)}</b></td>
+        <td class="num">${d.cv.toFixed(1)}%</td>
+        <td class="num">${d.gpu_avg.toFixed(0)} / ${d.gpu_max}%</td>
+        <td class="num">${d.ram_max}</td>
+        <td class="num">${d.slope >= 0 ? '+' : ''}${d.slope.toFixed(2)}</td>
+        <td>${v}</td>
+      </tr>`;
+    }).join('');
+  }
+})();
+
 // ----- Nav active highlight -----
 const sections = document.querySelectorAll('section');
 const navLinks = document.querySelectorAll('nav a');
@@ -898,6 +1515,152 @@ window.addEventListener('scroll', () => {
     a.classList.toggle('active', a.getAttribute('href') === '#' + active);
   });
 });
+
+// ============================================================
+// PIPELINE BOTTLENECK CHARTS (Nsight Systems data)
+// ============================================================
+(function() {
+  const BATCH_BREAKDOWN = [
+    { name: 'queueInput (CPU→GPU)', ms: 981, color: '#2ecc71' },
+    { name: 'convert_buf (format)',  ms: 220, color: '#3498db' },
+    { name: 'TRT GPU (YOLO FP16)',   ms: 822, color: '#8b5cf6' },
+    { name: 'dequeue+Meta (CPU đợi)',ms: 1366, color: '#f39c12' },
+    { name: 'overhead (sched.)',      ms: 411, color: '#94a3b8' },
+  ];
+
+  const BATCH_TIMES_MS = [1626, 1643, 1697, 3200, 3262, 4185, 4448, 4462, 4472, 4841, 5359, 6403];
+
+  const CYCLE_BREAKDOWN = [
+    { name: 'queueInput\n(CPU copy→GPU)', ms: 981, color: '#2ecc71' },
+    { name: 'convert_buf\n(NHWC↔NCHW)', ms: 220, color: '#3498db' },
+    { name: 'enqueue\n(submit kernel)', ms: 1, color: '#9b59b6' },
+    { name: 'GPU execute\n(TRT YOLO FP16)', ms: 822, color: '#8b5cf6' },
+    { name: 'dequeue+attach\nMeta (CPU đợi)', ms: 1366, color: '#f39c12' },
+  ];
+
+  // 1. Doughnut: sequential sub-stages inside 1 inference batch (avg 3.8s)
+  const bTotal = BATCH_BREAKDOWN.reduce((a,b) => a + b.ms, 0);
+  new Chart(document.getElementById('chart-bottleneck-pie'), {
+    type: 'doughnut',
+    data: {
+      labels: BATCH_BREAKDOWN.map(s => s.name),
+      datasets: [{
+        data: BATCH_BREAKDOWN.map(s => s.ms),
+        backgroundColor: BATCH_BREAKDOWN.map(s => s.color),
+        borderWidth: 2, borderColor: '#fff'
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { font: { size: 12 }, padding: 8 } },
+        tooltip: { callbacks: {
+          label: ctx => {
+            const ms = ctx.parsed;
+            return `${ctx.label}: ${ms}ms (${(ms/bTotal*100).toFixed(0)}%)`;
+          }
+        }}
+      }
+    }
+  });
+
+  // 2. Bar: inference batch cycle times (all 12 are inference batches)
+  new Chart(document.getElementById('chart-bottleneck-batches'), {
+    type: 'bar',
+    data: {
+      labels: BATCH_TIMES_MS.map((_, i) => `Batch ${i+1}`),
+      datasets: [{
+        label: 'Inference cycle (ms)',
+        data: BATCH_TIMES_MS,
+        backgroundColor: BATCH_TIMES_MS.map(v =>
+          v > 5000 ? '#ef4444' :     // very slow
+          v > 4000 ? '#f59e0b' :     // slow
+          v > 3000 ? '#fb923c' :     // moderate
+          '#10b981'                   // fast
+        ),
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          label: ctx => `${(ctx.parsed.y/1000).toFixed(1)}s — Inference batch (TRT + tracker + metadata)`
+        }}
+      },
+      scales: {
+        y: { beginAtZero: true, title: { display: true, text: 'ms' },
+             ticks: { callback: v => v >= 1000 ? (v/1000).toFixed(1)+'s' : v+'ms' } }
+      }
+    }
+  });
+
+  // 3. Horizontal bar: 1 batch cycle breakdown
+  new Chart(document.getElementById('chart-bottleneck-breakdown'), {
+    type: 'bar',
+    data: {
+      labels: CYCLE_BREAKDOWN.map(s => s.name),
+      datasets: [{
+        label: 'ms',
+        data: CYCLE_BREAKDOWN.map(s => s.ms),
+        backgroundColor: CYCLE_BREAKDOWN.map(s => s.color),
+        borderRadius: 4
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          label: ctx => {
+            const total = CYCLE_BREAKDOWN.reduce((a,b) => a+b.ms, 0);
+            return `${ctx.parsed.x} ms (${(ctx.parsed.x/total*100).toFixed(0)}%)`;
+          }
+        }}
+      },
+      scales: {
+        x: { title: { display: true, text: 'ms' } }
+      }
+    }
+  });
+
+  // 4. Timeline: Fire detection latency
+  new Chart(document.getElementById('chart-bottleneck-latency'), {
+    type: 'bar',
+    data: {
+      labels: ['Frame 1\n(detect)', 'Frame 2\n(+VLM start)', 'Frame 3\n(PP pass)', 'VLM done\n(COMPLETED)'],
+      datasets: [
+        {
+          label: 'Postprocess',
+          data: [0, 1.5, 3.0, null],
+          backgroundColor: '#3b82f6',
+          borderRadius: 4
+        },
+        {
+          label: 'VLM (Gemini API)',
+          data: [null, null, null, 3.9],
+          backgroundColor: '#8b5cf6',
+          borderRadius: 4
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: { callbacks: {
+          label: ctx => ctx.parsed.y !== null ? `T + ${ctx.parsed.y.toFixed(1)}s` : ''
+        }}
+      },
+      scales: {
+        y: { beginAtZero: true, title: { display: true, text: 'giây từ fire xuất hiện' },
+             ticks: { callback: v => v+'s' } }
+      }
+    }
+  });
+})();
 </script>
 </body>
 </html>
