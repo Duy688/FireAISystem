@@ -220,8 +220,8 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
 
   <div class="callout">
     <b>Phát hiện quan trọng:</b> <code>tegrastats</code> báo GPU 99% nhưng <code>nsys</code>
-    cho thấy GPU compute kernel thực chỉ chạy ~<b>33%</b> wall-time. Phần còn lại
-    (~67%) GPU idle giữa các kernel — pipeline đang chờ batch tiếp theo. <b>Có headroom ~2x.</b>
+    cho thấy GPU compute kernel thực chỉ chạy ~<b>22%</b> wall-time. Phần còn lại
+    (~78%) GPU idle giữa các kernel — pipeline đang chờ CPU copy/metadata. <b>Có headroom đáng kể.</b>
   </div>
 
   <div class="grid-2">
@@ -441,8 +441,8 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
 
   <div class="callout">
     <b>Câu trả lời ngắn:</b> tại 32 cam, throughput <b>plateau ở 19.3-20.0 fps tổng</b> (≈0.62 fps/cam) <b>BẤT KỂ</b>
-    config — nâng GATE từ 2 → 25 không tăng throughput vì <b>GPU 96-100% đã saturated</b>.
-    Đây là trần thực tế hiện tại của pipeline, không phải config đặt thấp.
+    config — nâng GATE từ 2 → 25 không tăng throughput vì <b>PGIE batch processing đã saturated</b>.
+    tegrastats báo GPU 96-100% nhưng đó là clock-gating, SM compute thực chỉ ~22%.
   </div>
 
   <div class="grid" style="margin-bottom:16px">
@@ -458,8 +458,8 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     </div>
     <div class="card">
       <h3>GPU tại trần</h3>
-      <div class="kpi" style="color:var(--red)">96-100<span class="unit">% saturated</span></div>
-      <div class="kpi-sub">Bottleneck cứng = GPU compute (PGIE inference)</div>
+      <div class="kpi" style="color:var(--red)">96-100<span class="unit">% clock</span></div>
+      <div class="kpi-sub">Clock-gating signal. SM compute thực ~22% (xem Bottleneck)</div>
     </div>
     <div class="card">
       <h3>Per-cam fairness</h3>
@@ -472,7 +472,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <div class="card">
       <h3>Throughput tổng theo từng level</h3>
       <div class="chart-wrap"><canvas id="chart-sweep-tput"></canvas></div>
-      <div class="footnote">6 levels nâng dần áp lực. Tput plateau ~20 fps suốt → GPU bottleneck. L5 = full firehose (no decoder drop).</div>
+      <div class="footnote">6 levels nâng dần áp lực. Tput plateau ~20 fps suốt → PGIE batch processing bottleneck. L5 = full firehose (no decoder drop).</div>
     </div>
     <div class="card">
       <h3>Per-cam FPS theo level</h3>
@@ -485,7 +485,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <div class="card">
       <h3>GPU clock activity theo level</h3>
       <div class="chart-wrap"><canvas id="chart-sweep-gpu"></canvas></div>
-      <div class="footnote">GR3D_FREQ avg 96-98%, max 99-100% — saturated ở mọi config. CHỨNG MINH bottleneck = GPU.</div>
+      <div class="footnote">GR3D_FREQ avg 96-98%, max 99-100% — clock luôn bật ở mọi config. Đây là clock-gating, SM compute thực ~22%.</div>
     </div>
     <div class="card">
       <h3>Device RAM peak theo level</h3>
@@ -541,7 +541,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
   <div class="callout err">
     <b>Phát hiện gây sốc:</b> Per-cam FPS bị "khóa cứng" tại <b>~0.62 fps</b> BẤT KỂ giảm số camera xuống còn 1 duy nhất.
     Bottleneck thực sự = <b>PGIE batch processing time</b> (~1.6s/batch), KHÔNG phải GPU compute như tegrastats báo.
-    GR3D=99% chỉ là clock-gating signal, compute thực ~33% (Nsight Systems confirmed).
+    GR3D=99% chỉ là clock-gating signal, compute thực ~22% (Nsight Systems tỷ lệ).
   </div>
 
   <div class="grid" style="margin-bottom:16px">
@@ -783,7 +783,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <div class="card">
       <h3>+N cameras (linear scaling)</h3>
       <div class="kpi">77<span class="unit">cam tối đa</span></div>
-      <div class="kpi-sub">Tính theo GPU compute thực ~33%, headroom 2x → ~77 cam total.<br>
+      <div class="kpi-sub">Tính theo GPU compute thực ~22%, headroom đáng kể → ~77 cam total.<br>
         Limit thực tế: RAM (3.5GB/cam-process) sẽ giới hạn ở ~106 cam khi RAM 80%.</div>
     </div>
     <div class="card">
@@ -794,7 +794,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <div class="card">
       <h3>Tăng FPS per cam (1 → 5 fps)</h3>
       <div class="kpi">5x<span class="unit">load</span></div>
-      <div class="kpi-sub">CPU sẽ lên ~865%/core. GPU compute lên ~~85% — vẫn dưới 100%. Khả thi.</div>
+      <div class="kpi-sub">CPU sẽ lên ~865%/core. Cần tối ưu PGIE batch processing để đạt 5x. Khả thi nếu giảm CPU overhead.</div>
     </div>
   </div>
 
@@ -803,7 +803,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <ol>
       <li><b>P0 — fix VLM error 6.6%</b>. Hangs (5 lần) cần SDK timeout + circuit-breaker. <i>Owner: VLM team. ETA: 1 tuần.</i></li>
       <li><b>P1 — verify RAM ceiling</b>. Thử thêm 4 cam (tổng 36) trong soak 1h, theo dõi RSS có vượt 4.5 GB không.</li>
-      <li><b>P1 — tăng batch size sgie</b>. NVTX cho thấy <code>dequeueOutputAndAttachMeta</code> chiếm 31% wall time → batch lớn hơn sẽ amortize.</li>
+      <li><b>P1 — giảm CPU overhead</b>. nsys cho thấy <code>dequeueOutputAndAttachMeta</code> chiếm ~36% batch cycle → tối ưu metadata path sẽ tăng throughput.</li>
       <li><b>P2 — disk space alert</b>. Thấy 1 critical event "LOW DISK SPACE" trong run. Cần alert ở 80% free.</li>
       <li><b>P3 — investigate NVDEC idle</b>. NVDEC=0% suốt run — H.264 đang decode bằng CPU thay vì hardware? Check pipeline config.</li>
     </ol>
