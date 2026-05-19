@@ -139,7 +139,7 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
     <div class="card">
       <h3>[DEVICE] GPU clock</h3>
       <div class="kpi" style="color:var(--orange)">95<span class="unit">% (clock)</span></div>
-      <div class="kpi-sub">⚠️ Đo clock-gating. Compute thực ≈ 33% (xem GPU deep-dive)</div>
+      <div class="kpi-sub">⚠️ Đo clock-gating. SM compute thực ~22% (xem Bottleneck section)</div>
     </div>
     <div class="card">
       <h3>[DEVICE] Power</h3>
@@ -640,26 +640,27 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
 <!-- PIPELINE BOTTLENECK ANALYSIS (Nsight Systems)                   -->
 <!-- ============================================================== -->
 <section id="bottleneck">
-  <h2><span class="num">09</span>Pipeline Bottleneck — Nsight Systems Analysis</h2>
-  <p class="lead">Tại sao per-cam FPS bị khóa ở ~0.6 fps dù tài nguyên thừa? Nsight Systems trace 54.3s cho câu trả lời.</p>
+  <h2><span class="num">09</span>Pipeline Bottleneck Analysis</h2>
+  <p class="lead">Tại sao per-cam FPS bị khóa ở ~0.6 fps dù tài nguyên thừa?</p>
 
   <div class="callout warn">
-    <b>Bottleneck = PGIE batch processing time, KHÔNG phải thiếu tài nguyên.</b>
-    GPU compute thực chỉ ~22% mỗi inference cycle, CPU avg ~50%, RAM 58% — nhưng pipeline stages xếp hàng sequential.<br>
-    <code>interval=1</code> → PGIE inference mỗi 2 batch (skip batch chỉ tracker, bypass <code>buffer_process</code>).<br>
-    Inference batch: <b>avg 3.8s</b> (1.6-6.4s). GStreamer pipelining → effective output: <b>~1.5s/batch → 0.67 fps/cam</b>.
+    <b>Bottleneck = PGIE batch processing, KHÔNG phải thiếu tài nguyên.</b>
+    PGIE-DIAG đo được: <b>19.2 fps tổng = 1 batch mỗi ~1.7s = 0.60 fps/cam</b> (ground truth).<br>
+    <code>interval=1</code> → PGIE inference mỗi 2 batch (skip batch chỉ tracker).<br>
+    Nsys trace (54.3s, có profiling overhead) cho thấy GPU compute chỉ chiếm ~22% thời gian batch — phần lớn là CPU overhead.
   </div>
 
   <!-- Pipeline flow diagram -->
   <div class="card" style="margin-bottom:16px">
-    <h3>Chuỗi pipeline thực tế (đo được)</h3>
+    <h3>Chuỗi pipeline thực tế (đo được từ PGIE-DIAG)</h3>
     <div style="font-family:ui-monospace,monospace; font-size:13px; line-height:1.8; overflow-x:auto; white-space:pre; padding:8px 0; color:#334155;">RTSP 25 fps/cam &times; 32 cam              = 800 fps
   &darr; NVDEC drop (DS_DEC_DROP_INTERVAL=3) = 200 fps (6.25/cam)
   &darr; Streammux batch=32                  &rarr; ~6.2 batches/s input
-  &darr; <b style="color:#e74c3c">PGIE (interval=1: inference mỗi 2 batch)</b>  &larr; BOTTLENECK
-  &darr;   Inference batch: avg 3.8s (1.6-6.4s) — TRT + tracker + metadata
-  &darr;   Skip batch: tracker predict only (bypass buffer_process, không có trong NVTX)
-  &darr; Back-pressure drop ~90%             = ~20 fps total (lý thuyết 0.67, thực đo ~0.6/cam)
+  &darr; <b style="color:#e74c3c">PGIE (interval=1: inference m&#7895;i 2 batch)</b>  &larr; BOTTLENECK
+  &darr;   Output: 1 batch m&#7895;i ~1.7s (19.2 fps / 32 = 0.6 batch/s)
+  &darr;   Inference batch: TRT + tracker + metadata
+  &darr;   Skip batch: tracker predict only
+  &darr; Back-pressure drop ~97%             = 19.2 fps total (0.60/cam)
   &darr; Export gate (PGIE_EXPORT_FPS=2)     = ~10 fps total (~0.30/cam)
   &darr; Pad probe &rarr; Orchestrator &rarr; VLM &rarr; Event</div>
   </div>
@@ -667,56 +668,59 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
   <!-- KPIs row -->
   <div class="grid" style="grid-template-columns:repeat(5,1fr); margin-bottom:16px;">
     <div class="card" style="text-align:center">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Inference batch (nsys)</div>
-      <div class="kpi" style="font-size:24px;color:var(--red)">3.8<span class="unit">s</span></div>
-      <div class="kpi-sub">avg (1.6-6.4s), 12 batches</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Batch output (PGIE-DIAG)</div>
+      <div class="kpi" style="font-size:24px;color:var(--red)">1.7<span class="unit">s</span></div>
+      <div class="kpi-sub">= 32 / 19.2 fps (ground truth)</div>
     </div>
     <div class="card" style="text-align:center">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Effective output</div>
-      <div class="kpi" style="font-size:24px">1.5<span class="unit">s/batch</span></div>
-      <div class="kpi-sub">interval=1 + pipelining → 0.67 fps/cam</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Per-cam FPS</div>
+      <div class="kpi" style="font-size:24px">0.60<span class="unit">fps</span></div>
+      <div class="kpi-sub">19.2 / 32 cam (std=0.002)</div>
     </div>
     <div class="card" style="text-align:center">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">GPU thật sự tính</div>
-      <div class="kpi" style="font-size:24px;color:var(--green)">822<span class="unit">ms</span></div>
-      <div class="kpi-sub">22% inference cycle</div>
-    </div>
-    <div class="card" style="text-align:center">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">CPU đợi (dequeue)</div>
-      <div class="kpi" style="font-size:24px;color:var(--orange)">1.4<span class="unit">s</span></div>
-      <div class="kpi-sub">36% inference cycle</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">GPU compute (nsys tỷ lệ)</div>
+      <div class="kpi" style="font-size:24px;color:var(--green)">~22<span class="unit">%</span></div>
+      <div class="kpi-sub">GPU nhàn, CPU overhead chiếm ~78%</div>
     </div>
     <div class="card" style="text-align:center">
       <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TRT inferences</div>
       <div class="kpi" style="font-size:24px">13</div>
-      <div class="kpi-sub">in 54.3s trace</div>
+      <div class="kpi-sub">in 54.3s nsys trace</div>
+    </div>
+    <div class="card" style="text-align:center">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:4px">E2E track latency</div>
+      <div class="kpi" style="font-size:24px">2.37<span class="unit">s p50</span></div>
+      <div class="kpi-sub">p95=8.33s · n=841 tracks</div>
     </div>
   </div>
 
   <!-- Charts row -->
   <div class="grid-2">
     <div class="card">
-      <h3>1 Inference Batch — Thời gian từng stage (avg)</h3>
+      <h3>Batch cycle — Tỷ lệ thời gian từng stage (nsys)</h3>
       <div class="chart-wrap tall"><canvas id="chart-bottleneck-pie"></canvas></div>
-      <div class="footnote">Các sub-stage <b>sequential</b> bên trong 1 batch cycle (avg 3.8s). GPU thật sự tính chỉ 22%, phần còn lại = CPU overhead.</div>
+      <div class="footnote">Tỷ lệ sub-stage sequential bên trong batch cycle. Giá trị tuyệt đối bị inflate do nsys overhead,
+        nhưng <b>tỷ lệ</b> cho thấy GPU chỉ ~22%, phần lớn = CPU copy + đợi.</div>
     </div>
     <div class="card">
-      <h3>12 Inference Batches — Cycle Time (ms)</h3>
+      <h3>12 Inference Batches — Nsys Cycle Time</h3>
       <div class="chart-wrap tall"><canvas id="chart-bottleneck-batches"></canvas></div>
-      <div class="footnote">Tất cả 12 batch đều có TRT inference (loại outlier batch 13). Batch ngắn 1.6s = queueInput nhanh, KHÔNG phải skip.</div>
+      <div class="footnote">Đo trong nsys trace (có profiling overhead). 3 batch đầu ~1.6s phản ánh tốc độ thật,
+        các batch sau bị inflate dần do nsys memory bus contention trên unified memory Jetson.</div>
     </div>
   </div>
 
   <div class="grid-2" style="margin-top:16px">
     <div class="card">
-      <h3>1 Inference Batch — Breakdown chi tiết (horizontal)</h3>
+      <h3>Batch cycle — Breakdown tỷ lệ (nsys)</h3>
       <div class="chart-wrap"><canvas id="chart-bottleneck-breakdown"></canvas></div>
-      <div class="footnote">Nguồn: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code>. dequeue+attach (CPU đợi GPU) chiếm 36% — stage tốn nhất.</div>
+      <div class="footnote">Nguồn: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code>. Tỷ lệ: dequeue+attach (CPU đợi) ~36%, queueInput ~26%, GPU ~22%.</div>
     </div>
     <div class="card">
-      <h3>Fire Detection Latency — Timeline (best case)</h3>
-      <div class="chart-wrap"><canvas id="chart-bottleneck-latency"></canvas></div>
-      <div class="footnote">Postprocess cần 3 appearances. Effective batch output mỗi ~1.5s → 2 interval = 3.0s. VLM song song từ frame 2.</div>
+      <h3>Fire Detection Latency — End-to-end</h3>
+      <div class="chart-wrap tall"><canvas id="chart-bottleneck-latency"></canvas></div>
+      <div class="footnote">T=0 = lửa xuất hiện trước camera. Batch output mỗi ~1.7s.
+        PP cần 3 appearances → 2 interval = 3.3s. VLM chạy song song từ detection #2.</div>
     </div>
   </div>
 
@@ -730,8 +734,8 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
       <tbody>
         <tr><td>CPU</td><td>~50%</td><td>~50%</td><td>Pipeline sequential — thêm CPU core không giúp vì các stage đợi nhau</td></tr>
         <tr><td>RAM</td><td>9.1/15.7 GB</td><td>6.6 GB</td><td>RAM không phải bottleneck</td></tr>
-        <tr><td>GPU compute (SM)</td><td>~22%</td><td>~78%</td><td>GPU tính 822ms nhưng phải <b>chờ</b> CPU copy/metadata ~3s</td></tr>
-        <tr><td>GPU clock (tegrastats)</td><td>99%</td><td style="color:var(--red)">Lừa!</td><td>Clock bật vì có work trong queue, SMs idle ~78% thời gian</td></tr>
+        <tr><td>GPU compute (SM)</td><td>~22% (nsys)</td><td>~78%</td><td>GPU nhàn nhưng phải <b>chờ</b> CPU copy/metadata xong mới được tính tiếp</td></tr>
+        <tr><td>GPU clock (tegrastats)</td><td>99%</td><td style="color:var(--red)">Lừa!</td><td>Clock bật vì có work trong queue, SM thực sự idle phần lớn thời gian</td></tr>
       </tbody>
     </table>
   </div>
@@ -759,16 +763,15 @@ footer { padding:32px 40px; text-align:center; color:var(--muted); font-size:13p
         <tr style="background:#ecfdf5"><td><code>interval=0</code> (hiện =1)</td><td>~2&times; → ~1.2 fps/cam</td><td><span class="tag tag-ok">Config change</span></td></tr>
         <tr><td>INT8 quantization</td><td>+50-100%</td><td><span class="tag tag-warn">High</span> — cần calibration</td></tr>
         <tr><td>Smaller model (960&times;544 → 480&times;272)</td><td>+100-200%</td><td><span class="tag tag-warn">Medium</span></td></tr>
-        <tr><td>Lighter tracker (NvDCF → IOU)</td><td>Bỏ 32% wall time</td><td><span class="tag tag-warn">Medium</span></td></tr>
+        <tr><td>Lighter tracker (NvDCF → IOU)</td><td>Giảm ~32% wall time (nsys)</td><td><span class="tag tag-warn">Medium</span></td></tr>
         <tr><td>Rebuild TRT engine batch &lt; 32</td><td>Giảm batch latency</td><td><span class="tag tag-warn">Medium</span></td></tr>
       </tbody>
     </table>
   </div>
 
   <div class="footnote" style="text-align:center; margin-top:14px">
-    Nguồn dữ liệu: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code> (NVTX Range Summary) +
-    <code>phase4_gpu/nsys_stats_cuda_gpu_kern_sum.txt</code> (GPU Kernel Timing) —
-    trace file: <code>phase4_gpu/fire_ai.nsys-rep</code> (34 MB, mở bằng Nsight Systems GUI)
+    Ground truth: <code>PGIE-DIAG</code> + <code>HEARTBEAT</code> (vận hành bình thường, không overhead).<br>
+    Tỷ lệ stages: <code>phase4_gpu/nsys_stats_nvtx_sum.txt</code> — trace file: <code>phase4_gpu/fire_ai.nsys-rep</code>
   </div>
 </section>
 
@@ -1517,36 +1520,31 @@ window.addEventListener('scroll', () => {
 });
 
 // ============================================================
-// PIPELINE BOTTLENECK CHARTS (Nsight Systems data)
+// PIPELINE BOTTLENECK CHARTS
+// Ground truth: 19.2 fps = 1.7s/batch (PGIE-DIAG)
+// Nsys: proportions only (absolute values inflated by profiling overhead)
 // ============================================================
 (function() {
-  const BATCH_BREAKDOWN = [
-    { name: 'queueInput (CPU→GPU)', ms: 981, color: '#2ecc71' },
-    { name: 'convert_buf (format)',  ms: 220, color: '#3498db' },
-    { name: 'TRT GPU (YOLO FP16)',   ms: 822, color: '#8b5cf6' },
-    { name: 'dequeue+Meta (CPU đợi)',ms: 1366, color: '#f39c12' },
-    { name: 'overhead (sched.)',      ms: 411, color: '#94a3b8' },
+  // Nsys proportional breakdown (% of batch cycle time)
+  const STAGE_PCT = [
+    { name: 'queueInput (CPU→GPU copy)', pct: 25.8, color: '#2ecc71' },
+    { name: 'convert_buf (format)',       pct: 5.8,  color: '#3498db' },
+    { name: 'TRT GPU compute',            pct: 21.6, color: '#8b5cf6' },
+    { name: 'dequeue+Meta (CPU đợi)',     pct: 35.9, color: '#f39c12' },
+    { name: 'overhead (scheduling)',       pct: 10.8, color: '#94a3b8' },
   ];
 
-  const BATCH_TIMES_MS = [1626, 1643, 1697, 3200, 3262, 4185, 4448, 4462, 4472, 4841, 5359, 6403];
+  // Nsys measured batch times (inflated by profiling overhead)
+  const NSYS_BATCH_MS = [1626, 1643, 1697, 3200, 3262, 4185, 4448, 4462, 4472, 4841, 5359, 6403];
 
-  const CYCLE_BREAKDOWN = [
-    { name: 'queueInput\n(CPU copy→GPU)', ms: 981, color: '#2ecc71' },
-    { name: 'convert_buf\n(NHWC↔NCHW)', ms: 220, color: '#3498db' },
-    { name: 'enqueue\n(submit kernel)', ms: 1, color: '#9b59b6' },
-    { name: 'GPU execute\n(TRT YOLO FP16)', ms: 822, color: '#8b5cf6' },
-    { name: 'dequeue+attach\nMeta (CPU đợi)', ms: 1366, color: '#f39c12' },
-  ];
-
-  // 1. Doughnut: sequential sub-stages inside 1 inference batch (avg 3.8s)
-  const bTotal = BATCH_BREAKDOWN.reduce((a,b) => a + b.ms, 0);
+  // 1. Doughnut: proportional breakdown of batch cycle
   new Chart(document.getElementById('chart-bottleneck-pie'), {
     type: 'doughnut',
     data: {
-      labels: BATCH_BREAKDOWN.map(s => s.name),
+      labels: STAGE_PCT.map(s => s.name),
       datasets: [{
-        data: BATCH_BREAKDOWN.map(s => s.ms),
-        backgroundColor: BATCH_BREAKDOWN.map(s => s.color),
+        data: STAGE_PCT.map(s => s.pct),
+        backgroundColor: STAGE_PCT.map(s => s.color),
         borderWidth: 2, borderColor: '#fff'
       }]
     },
@@ -1555,28 +1553,22 @@ window.addEventListener('scroll', () => {
       plugins: {
         legend: { position: 'right', labels: { font: { size: 12 }, padding: 8 } },
         tooltip: { callbacks: {
-          label: ctx => {
-            const ms = ctx.parsed;
-            return `${ctx.label}: ${ms}ms (${(ms/bTotal*100).toFixed(0)}%)`;
-          }
+          label: ctx => `${ctx.label}: ${ctx.parsed.toFixed(1)}% of batch cycle`
         }}
       }
     }
   });
 
-  // 2. Bar: inference batch cycle times (all 12 are inference batches)
+  // 2. Bar: nsys batch cycle times (labeled as profiling measurement)
   new Chart(document.getElementById('chart-bottleneck-batches'), {
     type: 'bar',
     data: {
-      labels: BATCH_TIMES_MS.map((_, i) => `Batch ${i+1}`),
+      labels: NSYS_BATCH_MS.map((_, i) => `Batch ${i+1}`),
       datasets: [{
-        label: 'Inference cycle (ms)',
-        data: BATCH_TIMES_MS,
-        backgroundColor: BATCH_TIMES_MS.map(v =>
-          v > 5000 ? '#ef4444' :     // very slow
-          v > 4000 ? '#f59e0b' :     // slow
-          v > 3000 ? '#fb923c' :     // moderate
-          '#10b981'                   // fast
+        label: 'Nsys measured (ms)',
+        data: NSYS_BATCH_MS,
+        backgroundColor: NSYS_BATCH_MS.map((v, i) =>
+          i < 3 ? '#10b981' : '#f59e0b'
         ),
         borderRadius: 4
       }]
@@ -1585,26 +1577,43 @@ window.addEventListener('scroll', () => {
       responsive: true, maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
+        annotation: { annotations: {
+          line1: { type: 'line', yMin: 1700, yMax: 1700, borderColor: '#10b981',
+                   borderDash: [5,5], borderWidth: 2,
+                   label: { display: true, content: '~1.7s operational (ground truth)',
+                            position: 'end', backgroundColor: '#10b981', font: { size: 11 } } }
+        }},
         tooltip: { callbacks: {
-          label: ctx => `${(ctx.parsed.y/1000).toFixed(1)}s — Inference batch (TRT + tracker + metadata)`
+          label: ctx => {
+            const ms = ctx.parsed.y;
+            const note = ctx.dataIndex < 3 ? ' (≈ operational speed)' : ' (nsys overhead)';
+            return `${(ms/1000).toFixed(1)}s${note}`;
+          }
         }}
       },
       scales: {
-        y: { beginAtZero: true, title: { display: true, text: 'ms' },
+        y: { beginAtZero: true, title: { display: true, text: 'ms (nsys profiling)' },
              ticks: { callback: v => v >= 1000 ? (v/1000).toFixed(1)+'s' : v+'ms' } }
       }
     }
   });
 
-  // 3. Horizontal bar: 1 batch cycle breakdown
+  // 3. Horizontal bar: proportional breakdown
+  const BREAKDOWN_H = [
+    { name: 'dequeue+attach\nMeta (CPU đợi)', pct: 35.9, color: '#f39c12' },
+    { name: 'queueInput\n(CPU copy→GPU)',      pct: 25.8, color: '#2ecc71' },
+    { name: 'GPU execute\n(TRT YOLO FP16)',    pct: 21.6, color: '#8b5cf6' },
+    { name: 'overhead\n(scheduling)',           pct: 10.8, color: '#94a3b8' },
+    { name: 'convert_buf\n(NHWC↔NCHW)',        pct: 5.8,  color: '#3498db' },
+  ];
   new Chart(document.getElementById('chart-bottleneck-breakdown'), {
     type: 'bar',
     data: {
-      labels: CYCLE_BREAKDOWN.map(s => s.name),
+      labels: BREAKDOWN_H.map(s => s.name),
       datasets: [{
-        label: 'ms',
-        data: CYCLE_BREAKDOWN.map(s => s.ms),
-        backgroundColor: CYCLE_BREAKDOWN.map(s => s.color),
+        label: '% batch cycle',
+        data: BREAKDOWN_H.map(s => s.pct),
+        backgroundColor: BREAKDOWN_H.map(s => s.color),
         borderRadius: 4
       }]
     },
@@ -1614,49 +1623,46 @@ window.addEventListener('scroll', () => {
       plugins: {
         legend: { display: false },
         tooltip: { callbacks: {
-          label: ctx => {
-            const total = CYCLE_BREAKDOWN.reduce((a,b) => a+b.ms, 0);
-            return `${ctx.parsed.x} ms (${(ctx.parsed.x/total*100).toFixed(0)}%)`;
-          }
+          label: ctx => `${ctx.parsed.x.toFixed(1)}% of batch cycle time`
         }}
       },
       scales: {
-        x: { title: { display: true, text: 'ms' } }
+        x: { title: { display: true, text: '% (nsys tỷ lệ)' }, max: 40 }
       }
     }
   });
 
-  // 4. Timeline: Fire detection latency
+  // 4. Fire detection latency (using ground truth 1.7s batch interval)
+  const BI = 1.7, VLM_DUR = 2.4;
   new Chart(document.getElementById('chart-bottleneck-latency'), {
     type: 'bar',
     data: {
-      labels: ['Frame 1\n(detect)', 'Frame 2\n(+VLM start)', 'Frame 3\n(PP pass)', 'VLM done\n(COMPLETED)'],
-      datasets: [
-        {
-          label: 'Postprocess',
-          data: [0, 1.5, 3.0, null],
-          backgroundColor: '#3b82f6',
-          borderRadius: 4
-        },
-        {
-          label: 'VLM (Gemini API)',
-          data: [null, null, null, 3.9],
-          backgroundColor: '#8b5cf6',
-          borderRadius: 4
-        }
-      ]
+      labels: [
+        'Pipeline fill\n(1st batch)',
+        'Detection #1',
+        'Detection #2\n(+VLM start)',
+        'Detection #3\n(PP pass)',
+        'VLM done\n(CONFIRMED)'
+      ],
+      datasets: [{
+        label: 'Thời gian từ lửa xuất hiện (s)',
+        data: [BI, BI, BI+BI, BI+2*BI, BI+BI+VLM_DUR],
+        backgroundColor: ['#94a3b8', '#3b82f6', '#3b82f6', '#10b981', '#8b5cf6'],
+        borderRadius: 4
+      }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { position: 'top' },
+        legend: { display: false },
         tooltip: { callbacks: {
-          label: ctx => ctx.parsed.y !== null ? `T + ${ctx.parsed.y.toFixed(1)}s` : ''
+          label: ctx => `T + ${ctx.parsed.y.toFixed(1)}s từ lửa xuất hiện`
         }}
       },
       scales: {
-        y: { beginAtZero: true, title: { display: true, text: 'giây từ fire xuất hiện' },
-             ticks: { callback: v => v+'s' } }
+        y: { beginAtZero: true, title: { display: true, text: 'giây từ lửa xuất hiện' },
+             ticks: { callback: v => v+'s' },
+             max: 8 }
       }
     }
   });
